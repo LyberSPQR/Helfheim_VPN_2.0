@@ -16,10 +16,6 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -157,13 +153,20 @@ public class CoreService {
 
             log.info("Сформирована конфигурация для {} пиров", addedPeers);
 
-            Path configPath = Paths.get("/etc/wireguard/wg0.peers.conf");
-            Files.writeString(configPath, config.toString(),
-                    StandardOpenOption.TRUNCATE_EXISTING,
-                    StandardOpenOption.CREATE,
-                    StandardOpenOption.WRITE);
+            ProcessBuilder pb = new ProcessBuilder("sudo", "tee", "/etc/wireguard/wg0.peers.conf");
+            Process process = pb.start();
 
-            log.info("Конфигурационный файл обновлен: {}", configPath);
+            try (OutputStreamWriter writer = new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8)) {
+                writer.write(config.toString());
+            }
+
+            boolean finished = process.waitFor(10, TimeUnit.SECONDS);
+            if (!finished || process.exitValue() != 0) {
+                log.error("Ошибка при записи конфига через sudo tee");
+                throw new RuntimeException("Failed to write config via sudo tee");
+            }
+
+            log.info("Конфигурационный файл обновлен через sudo tee");
 
             syncWireGuardConfig();
         }
@@ -175,6 +178,7 @@ public class CoreService {
             }
         }
     }
+
     public List<String> generateKeys() throws IOException, InterruptedException {
         log.debug("Генерация ключей WireGuard");
 
