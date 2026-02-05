@@ -1,0 +1,4 @@
+-- --liquibase formatted sql
+-- --includeAll path:db/changelog/changes
+-- --changeset admin:3
+-- CREATE INDEX ip_pool_index ON ip_pool(birth_date);
