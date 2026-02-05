@@ -5,9 +5,8 @@ import com.sloptech.helfheim.entity.Ip;
 import com.sloptech.helfheim.entity.User;
 import com.sloptech.helfheim.repository.IpRepository;
 import com.sloptech.helfheim.repository.UserRepository;
-import lombok.AllArgsConstructor;
-import lombok.NoArgsConstructor;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,134 +15,247 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
-import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class CoreService {
     private final UserRepository userRepository;
     private final IpRepository ipRepository;
 
+    private final ReentrantLock configLock = new ReentrantLock();
+
     @Value("${SERVER_PUBLIC_KEY}")
     private String serverPublicKey;
+
     @Value("${SERVER_SERVER_ENDPOINT}")
     private String serverEndpoint;
 
-    public User saveUser(User user){
+    @Value("${SERVER_PRIVATE_KEY}")
+    private String serverPrivateKey;
+
+    @Value("${SERVER_PORT:443}")
+    private int serverPort;
+
+    public User saveUser(User user) {
+        log.info("Сохранение пользователя: {}", user.getEmail());
         userRepository.save(user);
         return user;
     }
-    public void  deleteUser(User user){
+
+    public void deleteUser(User user) {
+        log.info("Удаление пользователя: {}", user.getEmail());
         userRepository.delete(user);
     }
-    public User updateUser(UserUpdateRequestDto userUpdateDto){
+
+    public User updateUser(UserUpdateRequestDto userUpdateDto) {
+        log.info("Обновление пользователя: {}", userUpdateDto.getEmail());
         User updatedUser = userRepository.findUserByEmail(userUpdateDto.getEmail());
         updatedUser.setSubscriptionExpiresAt(Instant.now()
                 .plusSeconds(userUpdateDto.getSubscriptionTimeInDays() * 86400L)
                 .getEpochSecond());
         userRepository.save(updatedUser);
+        log.info("Срок подписки пользователя {} обновлен", userUpdateDto.getEmail());
         return updatedUser;
-}
-@Transactional(rollbackFor = Exception.class)
-public void activateSubscription(UserUpdateRequestDto userUpdateDto) throws IOException, InterruptedException {
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void activateSubscription(UserUpdateRequestDto userUpdateDto) throws IOException, InterruptedException {
+        log.info("Активация подписки для пользователя: {}", userUpdateDto.getEmail());
 
         User user = userRepository.findUserByEmail(userUpdateDto.getEmail());
-    System.out.println("Шаг 1: Пользователь найден");
-    List<String> keys = generateKeys();
-    System.out.println("Шаг 2: Ключи сгенерированы");
-//        user.setSubscriptionExpiresAt(Instant.now()
-//                .plusSeconds(userUpdateDto.getSubscriptionTimeInDays() * 86400L)
-//                .getEpochSecond());
-    user.setSubscriptionExpiresAt(Instant.now()
-            .plusSeconds(30L * userUpdateDto.getSubscriptionTimeInDays())
-            .getEpochSecond());
+
+        if (user == null) throw new RuntimeException("user not found");
+
+        log.info("Шаг 1: Пользователь найден - {}", user.getEmail());
+
+        List<String> keys = generateKeys();
+        log.info("Шаг 2: Ключи сгенерированы для пользователя {}", user.getEmail());
+
+        user.setSubscriptionExpiresAt(Instant.now()
+                .plusSeconds(30L * userUpdateDto.getSubscriptionTimeInDays())
+                .getEpochSecond());
 
         user.setPrivateKey(keys.get(0));
         user.setPublicKey(keys.get(1));
 
         Ip freeIp = ipRepository.findFirstFreeIp()
-                .orElseThrow(() -> new RuntimeException("No free IP available"));
+                .orElseThrow(() -> {
+                    log.error("Нет свободных IP адресов для пользователя {}", user.getEmail());
+                    return new RuntimeException("No free IP available");
+                });
 
-    freeIp.setUserId(user.getId());
-    freeIp.setIsAssigned(true);
-    user.setIsActive(true);
-    ipRepository.save(freeIp);
-    userRepository.save(user);
-    System.out.println("Перед скриптом add to vpn");
-    addUserToVpnConf(user.getPublicKey(),freeIp.getIpAddress());
-    System.out.println("После скриптом add to vpn");
+        log.info("Шаг 3: Назначен свободный IP: {} для пользователя {}",
+                freeIp.getIpAddress().getHostAddress(), user.getEmail());
 
-}
+        freeIp.setUserId(user.getId());
+        freeIp.setIsAssigned(true);
+        user.setIsActive(true);
 
+        ipRepository.save(freeIp);
+        userRepository.save(user);
+        log.info("Шаг 4: Пользователь {} активирован", user.getEmail());
+
+        log.info("Шаг 5: Регенерация конфигурации WireGuard");
+        regenerateAndApplyWireGuardConfig();
+
+        log.info("Активация подписки для пользователя {} завершена успешно", user.getEmail());
+    }
+
+    public void regenerateAndApplyWireGuardConfig() throws IOException, InterruptedException {
+        if (!configLock.tryLock(10, TimeUnit.SECONDS)) {
+            log.warn("Не удалось захватить lock на обновление WireGuard за 10 секунд — пропускаем");
+            return;
+        }
+
+        try {
+            log.info("Захвачен lock → начинаем регенерацию конфигурации");
+            log.info("Начало регенерации конфигурации WireGuard");
+
+            List<User> activeUsers = userRepository.findUsersByIsActive(true);
+            log.info("Найдено активных пользователей: {}", activeUsers.size());
+
+            StringBuilder config = new StringBuilder();
+            int addedPeers = 0;
+
+            config.append("[Interface]\n")
+                    .append("PrivateKey = ").append(serverPrivateKey).append("\n")
+                    .append("ListenPort = ").append(serverPort).append("\n");
+
+            config.append("\n");
+
+            for (User user : activeUsers) {
+                if (user.getPublicKey() == null || user.getPublicKey().trim().isEmpty()) {
+                    log.warn("Пропущен пользователь {}: отсутствует публичный ключ", user.getEmail());
+                    continue;
+                }
+
+                Ip userIp = ipRepository.findIpByUserId(user.getId());
+                if (userIp == null || userIp.getIpAddress() == null) {
+                    log.warn("Пропущен пользователь {}: отсутствует назначенный IP", user.getEmail());
+                    continue;
+                }
+
+                String ip = userIp.getIpAddress().getHostAddress();
+                config.append("[Peer]\n")
+                        .append("PublicKey = ").append(user.getPublicKey()).append("\n")
+                        .append("AllowedIPs = ").append(ip).append("/32\n\n");
+                addedPeers++;
+
+                log.debug("Добавлен пир: {} -> {}", user.getEmail(), ip);
+            }
+
+            log.info("Сформирована конфигурация для {} пиров", addedPeers);
+
+            Path configPath = Paths.get("/etc/wireguard/wg0.peers.conf");
+            Files.writeString(configPath, config.toString(),
+                    StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.WRITE);
+
+            log.info("Конфигурационный файл обновлен: {}", configPath);
+
+            syncWireGuardConfig();
+        }
+        catch (Exception e) {
+            log.error("Ошибка при обновлении WireGuard конфига", e);
+        }finally {
+            if (configLock.isHeldByCurrentThread()) {
+                configLock.unlock();
+            }
+        }
+    }
     public List<String> generateKeys() throws IOException, InterruptedException {
+        log.debug("Генерация ключей WireGuard");
+
         String privateKey;
         String publicKey;
+
         Process genPrivateKey = new ProcessBuilder("wg", "genkey").start();
         var genkeyReader = new BufferedReader(
                 new InputStreamReader(genPrivateKey.getInputStream()));
         privateKey = genkeyReader.readLine().trim();
-        System.out.println("Приватный ключ сгенерирован");
+        log.debug("Приватный ключ сгенерирован");
+
         boolean finished = genPrivateKey.waitFor(5, TimeUnit.SECONDS);
         if (!finished) {
             genPrivateKey.destroyForcibly();
+            log.error("Таймаут при генерации приватного ключа");
             throw new RuntimeException("failed to generate private key");
         }
-        System.out.println("Перед генерацией публичного");
+
+        log.debug("Генерация публичного ключа");
         Process genPublicKey = new ProcessBuilder("wg", "pubkey").start();
         OutputStreamWriter writer = new OutputStreamWriter(genPublicKey.getOutputStream());
-        System.out.println("Перед записью в команду");
         writer.write(privateKey);
         writer.flush();
         writer.close();
-        System.out.println("После передачи приватного и закрытия");
+
         var pubkeyReader = new BufferedReader(
                 new InputStreamReader(genPublicKey.getInputStream()));
         publicKey = pubkeyReader.readLine().trim();
-        System.out.println("Публичный ключ записан");
+        log.debug("Публичный ключ сгенерирован");
+
         boolean pub_finished = genPublicKey.waitFor(5, TimeUnit.SECONDS);
         if (!pub_finished) {
             genPublicKey.destroyForcibly();
+            log.error("Таймаут при генерации публичного ключа");
             throw new RuntimeException("failed to generate public key");
         }
-        System.out.println("Публичный ключ сгенерирован");
+
+        log.info("Ключи успешно сгенерированы");
         return List.of(privateKey, publicKey);
     }
-    public void addUserToVpnConf(String publicKey, InetAddress ip) throws IOException, InterruptedException {
-System.out.println("Передаваемый в addToUser ключ " + publicKey);
-        ProcessBuilder pb = new ProcessBuilder("sudo", "/home/lyber_spqr/Учёба/vpn/add-peer.sh", publicKey, ip.getHostAddress());
+
+    public void syncWireGuardConfig() throws IOException, InterruptedException {
+        log.info("Синхронизация конфигурации WireGuard");
+
+        ProcessBuilder pb = new ProcessBuilder("sudo", "wg", "syncconf",
+                "wg0", "/etc/wireguard/wg0.peers.conf");
         pb.redirectErrorStream(true);
         Process process = pb.start();
-        boolean finished = process.waitFor(5, TimeUnit.SECONDS);
 
+        boolean finished = process.waitFor(10, TimeUnit.SECONDS);
         if (!finished) {
             process.destroyForcibly();
-            throw new RuntimeException("failed to add peers");
+            log.error("Таймаут при синхронизации конфигурации WireGuard");
+            throw new RuntimeException("wg syncconf timeout");
         }
-    }
-    public void removeUserFromVpnConf(String publicKey) throws IOException, InterruptedException {
-        System.out.println("Передаваемый в RemoveToUser ключ " + publicKey);
-        ProcessBuilder pb = new ProcessBuilder("sudo", "/home/lyber_spqr/Учёба/vpn/remove-peer.sh", publicKey);
-        pb.redirectErrorStream(true);
-        Process process = pb.start();
-        boolean finished = process.waitFor(5, TimeUnit.SECONDS);
 
-        if (!finished) {
-            process.destroyForcibly();
-            throw new RuntimeException("failed to add peers");
+        int exitCode = process.exitValue();
+        if (exitCode != 0) {
+            String errorOutput = new BufferedReader(
+                    new InputStreamReader(process.getInputStream())).lines()
+                    .collect(Collectors.joining("\n"));
+            log.error("Ошибка синхронизации конфигурации WireGuard: {}", errorOutput);
+            throw new RuntimeException("wg syncconf failed: " + errorOutput);
         }
+
+        log.info("Конфигурация WireGuard успешно синхронизирована");
     }
-//    public void syncVpnConfigs() throws IOException, InterruptedException {
-//
-//    }
-    public String generateConfig(String email){
-        User user =  userRepository.findUserByEmail(email);
+
+    public String generateConfig(String email) {
+        log.info("Генерация конфигурационного файла для пользователя: {}", email);
+
+        User user = userRepository.findUserByEmail(email);
+
+        if (user == null) throw new RuntimeException("user not found");
+
+        if(!user.getIsActive()) throw  new RuntimeException("user is not active");
+
         Ip ip = ipRepository.findIpByUserId(user.getId());
 
-        return String.format(
+        String config = String.format(
                 "[Interface]\n" +
                         "PrivateKey = %s\n" +
                         "Address = %s/32\n" +
@@ -155,5 +267,8 @@ System.out.println("Передаваемый в addToUser ключ " + publicKey
                         "PersistentKeepalive = 20\n\n",
                 user.getPrivateKey(), ip.getIpAddress().getHostAddress(), serverPublicKey, serverEndpoint
         );
+
+        log.debug("Конфигурация сгенерирована для {} -> {}", email, ip.getIpAddress().getHostAddress());
+        return config;
     }
 }

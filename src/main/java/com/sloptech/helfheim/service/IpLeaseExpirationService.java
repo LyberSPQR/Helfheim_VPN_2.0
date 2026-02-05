@@ -3,18 +3,17 @@ package com.sloptech.helfheim.service;
 import com.sloptech.helfheim.entity.User;
 import com.sloptech.helfheim.repository.IpRepository;
 import com.sloptech.helfheim.repository.UserRepository;
-import lombok.AllArgsConstructor;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class IpLeaseExpirationService {
@@ -22,44 +21,42 @@ public class IpLeaseExpirationService {
     private final IpRepository ipRepository;
     private final CoreService coreService;
 
-    @Scheduled( fixedRate = 60000)
+    @Scheduled(fixedDelay = 60000)
     @Transactional
     public void leaseExpiredIps() throws IOException, InterruptedException {
-        List<String> removedPubKeys = new ArrayList<>();
+        Long currentUnixTime = Instant.now().getEpochSecond();
+        List<User> expiredUsers = userRepository.findUsersWithExpiredSubscriptions(currentUnixTime);
 
-       Long currentUnixTime = Instant.now().getEpochSecond();
+        log.info("Найдено пользователей с истекшей подпиской: {}", expiredUsers.size());
 
-       List<User> expiredUsers = userRepository.findUsersWithExpiredSubscriptions(currentUnixTime);
-        System.out.println(expiredUsers.size());
+        if (expiredUsers.isEmpty()) {
+            log.debug("Нет пользователей с истекшей подпиской");
+            return;
+        }
 
-        for (User u : expiredUsers) {
-            String pubKey = u.getPublicKey();
+        for (User user : expiredUsers) {
+            String pubKey = user.getPublicKey();
 
             if (pubKey != null && !pubKey.trim().isEmpty()) {
+                log.info("Деактивация пользователя: {}, публичный ключ: {}", user.getEmail(), pubKey);
 
-                coreService.removeUserFromVpnConf(pubKey);
-                removedPubKeys.add(pubKey);
+                user.setIsActive(false);
+                user.setSubscriptionExpiresAt(null);
+                user.setPrivateKey(null);
+                user.setPublicKey(null);
 
-                u.setIsActive(false);
-                u.setSubscriptionExpiresAt(null);
-                u.setPrivateKey(null);
-                u.setPublicKey(null);
-                userRepository.save(u);
-
-                ipRepository.releaseUserIp(u.getId());
+                ipRepository.releaseUserIp(user.getId());
+                log.debug("IP освобожден для пользователя: {}", user.getEmail());
+            } else {
+                log.warn("Пользователь {} не имеет публичного ключа, пропускаем", user.getEmail());
             }
         }
-        if (!removedPubKeys.isEmpty()) {
-            try {
-                ProcessBuilder pb = new ProcessBuilder("sudo", "wg", "syncconf", "wg0", "/etc/wireguard/wg0.peers.conf");
-                pb.redirectErrorStream(true);
-                Process process = pb.start();
-                process.waitFor(10, TimeUnit.SECONDS);
-                System.out.println("syncconf выполнен после удаления " + removedPubKeys.size() + " пиров");
-            } catch (Exception e) {
-                System.err.println("syncconf в конце не удался: " + e.getMessage());
-            }
-        }
-        expiredUsers.clear();
+
+        userRepository.saveAll(expiredUsers);
+
+        log.info("Запуск регенерации конфигурации WireGuard после деактивации {} пользователей", expiredUsers.size());
+        coreService.regenerateAndApplyWireGuardConfig();
+
+        log.info("Обработка истекших подписок завершена");
     }
 }

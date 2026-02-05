@@ -10,8 +10,8 @@ import org.springframework.data.jpa.repository.Query;
 import java.util.Optional;
 
 public interface IpRepository extends JpaRepository<Ip,Long> {
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("SELECT i FROM Ip i WHERE i.isAssigned = false ORDER BY i.id LIMIT 1")
+    @Query(value = "SELECT * FROM ip_pool i WHERE i.is_assigned = false ORDER BY i.id LIMIT 1 FOR UPDATE SKIP LOCKED",
+            nativeQuery = true)
     Optional<Ip> findFirstFreeIp();
 
     @Modifying
