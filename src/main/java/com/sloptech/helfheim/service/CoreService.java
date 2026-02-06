@@ -65,6 +65,7 @@ public class CoreService {
     public User updateUser(UserUpdateRequestDto userUpdateDto) {
         log.info("Обновление пользователя: {}", userUpdateDto.getEmail());
         User updatedUser = userRepository.findUserByEmail(userUpdateDto.getEmail());
+        if (updatedUser == null) throw new RuntimeException("user not found");
         updatedUser.setSubscriptionExpiresAt(Instant.now()
                 .plusSeconds(userUpdateDto.getSubscriptionTimeInDays() * 86400L)
                 .getEpochSecond());
@@ -266,6 +267,7 @@ public class CoreService {
         if(!user.getIsActive()) throw  new RuntimeException("user is not active");
 
         Ip ip = ipRepository.findIpByUserId(user.getId());
+        if (ip == null || ip.getIpAddress() == null) throw new RuntimeException("no IP assigned for user");
 
         String config = String.format(
                 "[Interface]\n" +

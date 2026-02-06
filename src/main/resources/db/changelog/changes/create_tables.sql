@@ -14,9 +14,6 @@ CREATE TABLE ip_pool(
     is_assigned BOOLEAN DEFAULT FALSE
 );
 
-CREATE INDEX ip_pool_index ON ip_pool(is_assigned)
-WHERE is_assigned = FALSE;
-
 INSERT INTO ip_pool (ip_address, is_assigned)
 SELECT
     ('10.10.0.0'::inet + i) AS ip_address,
