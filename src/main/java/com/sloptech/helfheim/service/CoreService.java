@@ -1,5 +1,6 @@
 package com.sloptech.helfheim.service;
 
+import com.sloptech.helfheim.dto.UserCreateRequestDto;
 import com.sloptech.helfheim.dto.UserUpdateRequestDto;
 import com.sloptech.helfheim.entity.Ip;
 import com.sloptech.helfheim.entity.User;
@@ -43,15 +44,22 @@ public class CoreService {
     @Value("${SERVER_PORT:443}")
     private int serverPort;
 
-    public User saveUser(User user) {
-        log.info("Сохранение пользователя: {}", user.getEmail());
+    public User saveUser(UserCreateRequestDto dto) {
+        log.info("Сохранение пользователя: {}", dto.getEmail());
+        User user = new User();
+        user.setEmail(dto.getEmail());
+        user.setPassword(dto.getPassword());
+        user.setIsActive(false);
         userRepository.save(user);
         return user;
     }
 
-    public void deleteUser(User user) {
-        log.info("Удаление пользователя: {}", user.getEmail());
-        userRepository.delete(user);
+    public void deleteUser(Long userId) {
+        User user = userRepository.findById(userId).orElse(null);
+        if (user != null) {
+            log.info("Удаление пользователя: {}", user.getEmail());
+            userRepository.delete(user);
+        }
     }
 
     public User updateUser(UserUpdateRequestDto userUpdateDto) {

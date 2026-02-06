@@ -1,7 +1,8 @@
 package com.sloptech.helfheim.controller;
 
+import com.sloptech.helfheim.dto.UserCreateRequestDto;
+import com.sloptech.helfheim.dto.UserResponseDto;
 import com.sloptech.helfheim.dto.UserUpdateRequestDto;
-import com.sloptech.helfheim.entity.User;
 import com.sloptech.helfheim.service.CoreService;
 import lombok.AllArgsConstructor;
 import org.springframework.http.HttpHeaders;
@@ -21,8 +22,8 @@ public class CoreController {
 
 
     @PostMapping("/add")
-    public ResponseEntity<User> addUser( @RequestBody User user){
-        return new ResponseEntity<>(coreService.saveUser(user),HttpStatus.CREATED);
+    public ResponseEntity<UserResponseDto> addUser(@RequestBody UserCreateRequestDto dto) {
+        return new ResponseEntity<>(UserResponseDto.from(coreService.saveUser(dto)), HttpStatus.CREATED);
     }
     @PostMapping("/activate")
     public ResponseEntity<Void> activateSubscription(@RequestBody UserUpdateRequestDto updateDto) throws IOException, InterruptedException {
@@ -30,8 +31,8 @@ public class CoreController {
         return new ResponseEntity<Void>(HttpStatus.CREATED);
     }
     @PutMapping
-    public ResponseEntity<User> updateUser(@RequestBody UserUpdateRequestDto user){
-        return new ResponseEntity<>(coreService.updateUser(user),HttpStatus.OK);
+    public ResponseEntity<UserResponseDto> updateUser(@RequestBody UserUpdateRequestDto user) {
+        return new ResponseEntity<>(UserResponseDto.from(coreService.updateUser(user)), HttpStatus.OK);
     }
     @GetMapping("/download/{email}")
     public ResponseEntity<byte[]> downloadUserConfig(@PathVariable String email){

@@ -4,6 +4,6 @@ import lombok.Data;
 
 @Data
 public class UserUpdateRequestDto {
-    String email;
-    Integer subscriptionTimeInDays;
+    private String email;
+    private Integer subscriptionTimeInDays;
 }
