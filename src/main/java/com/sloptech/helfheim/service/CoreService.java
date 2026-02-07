@@ -2,6 +2,7 @@ package com.sloptech.helfheim.service;
 
 import com.sloptech.helfheim.dto.UserCreateRequestDto;
 import com.sloptech.helfheim.dto.UserUpdateRequestDto;
+import com.sloptech.helfheim.dto.VpnPeerDto;
 import com.sloptech.helfheim.entity.Ip;
 import com.sloptech.helfheim.entity.User;
 import com.sloptech.helfheim.repository.IpRepository;
@@ -127,8 +128,8 @@ public class CoreService {
             log.info("Захвачен lock → начинаем регенерацию конфигурации");
             log.info("Начало регенерации конфигурации WireGuard");
 
-            List<User> activeUsers = userRepository.findUsersByIsActive(true);
-            log.info("Найдено активных пользователей: {}", activeUsers.size());
+            List<VpnPeerDto> activePeers = userRepository.findActivePeers();
+            log.info("Найдено активных пользователей: {}", activePeers.size());
 
             StringBuilder config = new StringBuilder();
             int addedPeers = 0;
@@ -139,25 +140,23 @@ public class CoreService {
 
             config.append("\n");
 
-            for (User user : activeUsers) {
-                if (user.getPublicKey() == null || user.getPublicKey().trim().isEmpty()) {
-                    log.warn("Пропущен пользователь {}: отсутствует публичный ключ", user.getEmail());
+            for (VpnPeerDto peer : activePeers) {
+                if (peer.getPublicKey() == null || peer.getPublicKey().trim().isEmpty()) {
+                    log.warn("Пропущен пользователь {}: отсутствует публичный ключ", peer.getEmail());
+                    continue;
+                }
+                if (peer.getIpAddress() == null || peer.getIpAddress().getHostAddress() == null) {
+                    log.warn("Пропущен пользователь {}: отсутствует назначенный IP", peer.getEmail());
                     continue;
                 }
 
-                Ip userIp = ipRepository.findIpByUserId(user.getId());
-                if (userIp == null || userIp.getIpAddress() == null) {
-                    log.warn("Пропущен пользователь {}: отсутствует назначенный IP", user.getEmail());
-                    continue;
-                }
-
-                String ip = userIp.getIpAddress().getHostAddress();
+                String ip = peer.getIpAddress().getHostAddress();
                 config.append("[Peer]\n")
-                        .append("PublicKey = ").append(user.getPublicKey()).append("\n")
+                        .append("PublicKey = ").append(peer.getPublicKey()).append("\n")
                         .append("AllowedIPs = ").append(ip).append("/32\n\n");
                 addedPeers++;
 
-                log.debug("Добавлен пир: {} -> {}", user.getEmail(), ip);
+                log.debug("Добавлен пир: {} -> {}", peer.getEmail(), ip);
             }
 
             log.info("Сформирована конфигурация для {} пиров", addedPeers);
