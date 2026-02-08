@@ -1,6 +1,5 @@
 package com.sloptech.helfheim.dto;
 
-import lombok.AllArgsConstructor;
 import lombok.Data;
 
 import java.net.InetAddress;

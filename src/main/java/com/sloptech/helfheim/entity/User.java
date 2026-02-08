@@ -1,10 +1,13 @@
 package com.sloptech.helfheim.entity;
 
-
-import jakarta.persistence.*;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
 import lombok.Data;
-import org.apache.commons.lang3.builder.ToStringBuilder;
 
 
 @Entity
@@ -28,6 +31,7 @@ public class User {
     @Column(name = "subscription_expires_at")
     private Long subscriptionExpiresAt;
 
-    public User(){}
+    public User() {
+    }
 
 }

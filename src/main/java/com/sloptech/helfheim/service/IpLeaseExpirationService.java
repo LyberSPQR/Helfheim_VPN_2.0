@@ -7,7 +7,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.IOException;
 import java.time.Instant;
@@ -21,42 +21,50 @@ public class IpLeaseExpirationService {
     private final IpRepository ipRepository;
     private final CoreService coreService;
 
+    private final TransactionTemplate transactionTemplate;
+
     @Scheduled(fixedDelay = 60000)
-    @Transactional
     public void leaseExpiredIps() throws IOException, InterruptedException {
         Long currentUnixTime = Instant.now().getEpochSecond();
-        List<User> expiredUsers = userRepository.findUsersWithExpiredSubscriptions(currentUnixTime);
+        final boolean[] needsSync = {false};
+        transactionTemplate.executeWithoutResult(status -> {
+            List<User> expiredUsers = userRepository.findUsersWithExpiredSubscriptions(currentUnixTime);
 
-        log.info("Найдено пользователей с истекшей подпиской: {}", expiredUsers.size());
+            log.info("Найдено пользователей с истекшей подпиской: {}", expiredUsers.size());
 
-        if (expiredUsers.isEmpty()) {
-            log.debug("Нет пользователей с истекшей подпиской");
-            return;
-        }
-
-        for (User user : expiredUsers) {
-            String pubKey = user.getPublicKey();
-
-            if (pubKey != null && !pubKey.trim().isEmpty()) {
-                log.info("Деактивация пользователя: {}, публичный ключ: {}", user.getEmail(), pubKey);
-
-                user.setIsActive(false);
-                user.setSubscriptionExpiresAt(null);
-                user.setPrivateKey(null);
-                user.setPublicKey(null);
-
-                ipRepository.releaseUserIp(user.getId());
-                log.debug("IP освобожден для пользователя: {}", user.getEmail());
-            } else {
-                log.warn("Пользователь {} не имеет публичного ключа, пропускаем", user.getEmail());
+            if (expiredUsers.isEmpty()) {
+                log.debug("Нет пользователей с истекшей подпиской");
+                return;
             }
+
+            for (User user : expiredUsers) {
+                String pubKey = user.getPublicKey();
+
+                if (pubKey != null && !pubKey.trim().isEmpty()) {
+                    log.info("Деактивация пользователя: {}, публичный ключ: {}", user.getEmail(), pubKey);
+
+                    user.setIsActive(false);
+                    user.setSubscriptionExpiresAt(null);
+                    user.setPrivateKey(null);
+                    user.setPublicKey(null);
+
+                    ipRepository.releaseUserIp(user.getId());
+                    log.debug("IP освобожден для пользователя: {}", user.getEmail());
+                } else {
+                    log.warn("Пользователь {} не имеет публичного ключа, пропускаем", user.getEmail());
+                }
+            }
+
+            userRepository.saveAll(expiredUsers);
+            needsSync[0] = true;
+            if (needsSync[0] == true)
+                log.info("Запуск регенерации конфигурации WireGuard после деактивации {} пользователей", expiredUsers.size());
+            else
+                log.info("Запуск регенерации конфигурации WireGuard не требуется");
+        });
+        if (needsSync[0] == true) {
+            coreService.regenerateAndApplyWireGuardConfig();
         }
-
-        userRepository.saveAll(expiredUsers);
-
-        log.info("Запуск регенерации конфигурации WireGuard после деактивации {} пользователей", expiredUsers.size());
-        coreService.regenerateAndApplyWireGuardConfig();
-
         log.info("Обработка истекших подписок завершена");
     }
 }

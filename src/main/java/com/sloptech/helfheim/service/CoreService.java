@@ -11,7 +11,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -30,6 +30,8 @@ import java.util.stream.Collectors;
 public class CoreService {
     private final UserRepository userRepository;
     private final IpRepository ipRepository;
+
+    private final TransactionTemplate transactionTemplate;
 
     private final ReentrantLock configLock = new ReentrantLock();
 
@@ -75,57 +77,64 @@ public class CoreService {
         return updatedUser;
     }
 
-    @Transactional(rollbackFor = Exception.class)
     public void activateSubscription(UserUpdateRequestDto userUpdateDto) throws IOException, InterruptedException {
         log.info("Активация подписки для пользователя: {}", userUpdateDto.getEmail());
+        transactionTemplate.executeWithoutResult(status -> {
+            User user = userRepository.findUserByEmail(userUpdateDto.getEmail());
 
-        User user = userRepository.findUserByEmail(userUpdateDto.getEmail());
+            if (user == null) throw new RuntimeException("user not found");
 
-        if (user == null) throw new RuntimeException("user not found");
+            log.info("Пользователь найден - {}", user.getEmail());
 
-        log.info("Шаг 1: Пользователь найден - {}", user.getEmail());
+            List<String> keys = null;
+            try {
+                keys = generateKeys();
+            } catch (IOException | InterruptedException e) {
+                log.info("Не удалось сгенерировать ключи для пользователя {}", user.getEmail());
+                throw new RuntimeException(e);
+            }
+            log.info("Ключи сгенерированы для пользователя {}", user.getEmail());
 
-        List<String> keys = generateKeys();
-        log.info("Шаг 2: Ключи сгенерированы для пользователя {}", user.getEmail());
+            user.setSubscriptionExpiresAt(Instant.now()
+                    .plusSeconds(30L * userUpdateDto.getSubscriptionTimeInDays())
+                    .getEpochSecond());
 
-        user.setSubscriptionExpiresAt(Instant.now()
-                .plusSeconds(30L * userUpdateDto.getSubscriptionTimeInDays())
-                .getEpochSecond());
+            user.setPrivateKey(keys.get(0));
+            user.setPublicKey(keys.get(1));
 
-        user.setPrivateKey(keys.get(0));
-        user.setPublicKey(keys.get(1));
+            Ip freeIp = ipRepository.findFirstFreeIp()
+                    .orElseThrow(() -> {
+                        log.error("Нет свободных IP адресов для пользователя {}", user.getEmail());
+                        return new RuntimeException("No free IP available");
+                    });
 
-        Ip freeIp = ipRepository.findFirstFreeIp()
-                .orElseThrow(() -> {
-                    log.error("Нет свободных IP адресов для пользователя {}", user.getEmail());
-                    return new RuntimeException("No free IP available");
-                });
+            log.info("Назначен свободный IP: {} для пользователя {}",
+                    freeIp.getIpAddress().getHostAddress(), user.getEmail());
 
-        log.info("Шаг 3: Назначен свободный IP: {} для пользователя {}",
-                freeIp.getIpAddress().getHostAddress(), user.getEmail());
+            freeIp.setUserId(user.getId());
+            freeIp.setIsAssigned(true);
+            user.setIsActive(true);
 
-        freeIp.setUserId(user.getId());
-        freeIp.setIsAssigned(true);
-        user.setIsActive(true);
+            ipRepository.save(freeIp);
+            userRepository.save(user);
+            log.info(" Пользователь {} активирован", user.getEmail());
 
-        ipRepository.save(freeIp);
-        userRepository.save(user);
-        log.info("Шаг 4: Пользователь {} активирован", user.getEmail());
+        });
 
-        log.info("Шаг 5: Регенерация конфигурации WireGuard");
+        log.info("Регенерация конфигурации WireGuard");
         regenerateAndApplyWireGuardConfig();
 
-        log.info("Активация подписки для пользователя {} завершена успешно", user.getEmail());
+        log.info("Активация подписки для пользователя {} завершена успешно", userUpdateDto.getEmail());
     }
 
     public void regenerateAndApplyWireGuardConfig() throws IOException, InterruptedException {
         if (!configLock.tryLock(10, TimeUnit.SECONDS)) {
-            log.warn("Не удалось захватить lock на обновление WireGuard за 10 секунд — пропускаем");
+            log.warn("Не удалось захватить lock на обновление WireGuard");
             return;
         }
 
         try {
-            log.info("Захвачен lock → начинаем регенерацию конфигурации");
+            log.info("Захвачен lock → начинается регенерация конфигурации");
             log.info("Начало регенерации конфигурации WireGuard");
 
             List<VpnPeerDto> activePeers = userRepository.findActivePeers();
@@ -177,10 +186,9 @@ public class CoreService {
             log.info("Конфигурационный файл обновлен через sudo tee");
 
             syncWireGuardConfig();
-        }
-        catch (Exception e) {
+        } catch (Exception e) {
             log.error("Ошибка при обновлении WireGuard конфига", e);
-        }finally {
+        } finally {
             if (configLock.isHeldByCurrentThread()) {
                 configLock.unlock();
             }
@@ -263,7 +271,7 @@ public class CoreService {
 
         if (user == null) throw new RuntimeException("user not found");
 
-        if(!user.getIsActive()) throw  new RuntimeException("user is not active");
+        if (!user.getIsActive()) throw new RuntimeException("user is not active");
 
         Ip ip = ipRepository.findIpByUserId(user.getId());
         if (ip == null || ip.getIpAddress() == null) throw new RuntimeException("no IP assigned for user");
