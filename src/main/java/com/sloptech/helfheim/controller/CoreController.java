@@ -1,8 +1,6 @@
 package com.sloptech.helfheim.controller;
 
-import com.sloptech.helfheim.dto.UserCreateRequestDto;
-import com.sloptech.helfheim.dto.UserResponseDto;
-import com.sloptech.helfheim.dto.UserUpdateRequestDto;
+import com.sloptech.helfheim.dto.*;
 import com.sloptech.helfheim.service.CoreService;
 import lombok.AllArgsConstructor;
 import org.springframework.http.HttpHeaders;
@@ -36,7 +34,10 @@ public class CoreController {
     public ResponseEntity<UserResponseDto> addUser(@Valid @RequestBody UserCreateRequestDto dto) {
         return new ResponseEntity<>(UserResponseDto.from(coreService.saveUser(dto)), HttpStatus.CREATED);
     }
-
+    @PostMapping("/login")
+    public ResponseEntity<LoginResponseDto> loginUser(@RequestBody LoginRequestDto dto) throws IOException {
+        return new ResponseEntity<>(coreService.generateConfigForFrontend(dto), HttpStatus.OK);
+    }
     @PostMapping("/activate")
     public ResponseEntity<Void> activateSubscription(@Valid @RequestBody UserUpdateRequestDto updateDto) throws IOException, InterruptedException {
         coreService.activateSubscription(updateDto);

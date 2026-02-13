@@ -1,8 +1,6 @@
 package com.sloptech.helfheim.service;
 
-import com.sloptech.helfheim.dto.UserCreateRequestDto;
-import com.sloptech.helfheim.dto.UserUpdateRequestDto;
-import com.sloptech.helfheim.dto.VpnPeerDto;
+import com.sloptech.helfheim.dto.*;
 import com.sloptech.helfheim.entity.Ip;
 import com.sloptech.helfheim.entity.User;
 import com.sloptech.helfheim.repository.IpRepository;
@@ -96,7 +94,7 @@ public class CoreService {
             log.info("Ключи сгенерированы для пользователя {}", user.getEmail());
 
             user.setSubscriptionExpiresAt(Instant.now()
-                    .plusSeconds(30L * userUpdateDto.getSubscriptionTimeInDays())
+                    .plusSeconds(86400L * userUpdateDto.getSubscriptionTimeInDays())
                     .getEpochSecond());
 
             user.setPrivateKey(keys.get(0));
@@ -291,5 +289,26 @@ public class CoreService {
 
         log.debug("Конфигурация сгенерирована для {} -> {}", email, ip.getIpAddress().getHostAddress());
         return config;
+    }
+    public LoginResponseDto generateConfigForFrontend(LoginRequestDto dto) throws IOException {
+        log.info("Генерация конфигурационного файла для пользователя: {}", dto.getLogin());
+
+        User user = userRepository.findUserByEmail(dto.getLogin());
+log.debug("данные из фронта " + dto.getLogin() + " " + dto.getPassword());
+        if (user == null) throw new RuntimeException("user not found");
+
+        if (!user.getIsActive()) throw new RuntimeException("user is not active");
+
+        Ip ip = ipRepository.findIpByUserId(user.getId());
+        if (ip == null || ip.getIpAddress() == null) throw new RuntimeException("no IP assigned for user");
+
+        LoginResponseDto loginResponseDto = new LoginResponseDto();
+        loginResponseDto.setServerPublicKey(serverPublicKey);
+        loginResponseDto.setPrivateKey(user.getPrivateKey());
+        loginResponseDto.setIpAddress(ip.getIpAddress().getHostAddress());
+        loginResponseDto.setEndpoint(serverEndpoint);
+
+        log.debug("Конфигурация сгенерирована для {} -> {}", dto.getLogin(), ip.getIpAddress().getHostAddress());
+        return loginResponseDto;
     }
 }
