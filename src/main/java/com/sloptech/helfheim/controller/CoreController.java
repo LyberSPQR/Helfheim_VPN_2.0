@@ -45,7 +45,7 @@ public class CoreController {
     }
 
     @PutMapping
-    public ResponseEntity<UserResponseDto> updateUser(@Valid @RequestBody UserUpdateRequestDto user) {
+    public ResponseEntity<UserResponseDto> updateUser(@Valid @RequestBody UserUpdateRequestDto user) throws IOException, InterruptedException {
         return new ResponseEntity<>(UserResponseDto.from(coreService.updateUser(user)), HttpStatus.OK);
     }
 

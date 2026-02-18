@@ -63,15 +63,26 @@ public class CoreService {
         }
     }
 
-    public User updateUser(UserUpdateRequestDto userUpdateDto) {
+    public User updateUser(UserUpdateRequestDto userUpdateDto) throws IOException, InterruptedException {
         log.info("Обновление пользователя: {}", userUpdateDto.getEmail());
         User updatedUser = userRepository.findUserByEmail(userUpdateDto.getEmail());
         if (updatedUser == null) throw new RuntimeException("user not found");
-        updatedUser.setSubscriptionExpiresAt(Instant.now()
-                .plusSeconds(userUpdateDto.getSubscriptionTimeInDays() * 86400L)
-                .getEpochSecond());
-        userRepository.save(updatedUser);
-        log.info("Срок подписки пользователя {} обновлен", userUpdateDto.getEmail());
+
+        long currentUnixTime = Instant.now().getEpochSecond();
+
+        if(updatedUser.getSubscriptionExpiresAt() == null || updatedUser.getSubscriptionExpiresAt() <= currentUnixTime) {
+
+            log.info("Начало полного обновления подписки пользователя {} ", userUpdateDto.getEmail());
+            activateSubscription(userUpdateDto);
+            log.info("Успешное полное обновление подписки пользователя {} ", userUpdateDto.getEmail());
+        }
+        else{
+            updatedUser.setSubscriptionExpiresAt(Instant.now()
+                    .plusSeconds(userUpdateDto.getSubscriptionTimeInDays() * 86400L)
+                    .getEpochSecond());
+            userRepository.save(updatedUser);
+            log.info("Срок подписки пользователя {} обновлен", userUpdateDto.getEmail());
+        }
         return updatedUser;
     }
 
@@ -278,7 +289,7 @@ public class CoreService {
                 "[Interface]\n" +
                         "PrivateKey = %s\n" +
                         "Address = %s/32\n" +
-                        "DNS = 1.1.1.1\n\n" +
+                        "DNS = 1.1.1.1, 8.8.8.8\n\n" +
                         "[Peer]\n" +
                         "PublicKey = %s\n" +
                         "Endpoint = %s\n" +
@@ -298,7 +309,7 @@ log.debug("данные из фронта " + dto.getLogin() + " " + dto.getPass
         if (user == null) throw new RuntimeException("user not found");
 
         if (!user.getIsActive()) throw new RuntimeException("user is not active");
-
+        if(!user.getPassword().equals(dto.getPassword())) throw new RuntimeException("password is incorrect");
         Ip ip = ipRepository.findIpByUserId(user.getId());
         if (ip == null || ip.getIpAddress() == null) throw new RuntimeException("no IP assigned for user");
 
@@ -307,6 +318,7 @@ log.debug("данные из фронта " + dto.getLogin() + " " + dto.getPass
         loginResponseDto.setPrivateKey(user.getPrivateKey());
         loginResponseDto.setIpAddress(ip.getIpAddress().getHostAddress());
         loginResponseDto.setEndpoint(serverEndpoint);
+        loginResponseDto.setExpiresAt(user.getSubscriptionExpiresAt());
 
         log.debug("Конфигурация сгенерирована для {} -> {}", dto.getLogin(), ip.getIpAddress().getHostAddress());
         return loginResponseDto;

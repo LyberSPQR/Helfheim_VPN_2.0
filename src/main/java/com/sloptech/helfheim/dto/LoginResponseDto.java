@@ -8,4 +8,5 @@ public class LoginResponseDto {
     private String ipAddress;
     private String serverPublicKey ;
     private String endpoint;
+    private Long expiresAt;
 }
