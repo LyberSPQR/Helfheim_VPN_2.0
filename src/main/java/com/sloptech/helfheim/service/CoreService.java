@@ -70,13 +70,12 @@ public class CoreService {
 
         long currentUnixTime = Instant.now().getEpochSecond();
 
-        if(updatedUser.getSubscriptionExpiresAt() == null || updatedUser.getSubscriptionExpiresAt() <= currentUnixTime) {
+        if (updatedUser.getSubscriptionExpiresAt() == null || updatedUser.getSubscriptionExpiresAt() <= currentUnixTime) {
 
             log.info("Начало полного обновления подписки пользователя {} ", userUpdateDto.getEmail());
             activateSubscription(userUpdateDto);
             log.info("Успешное полное обновление подписки пользователя {} ", userUpdateDto.getEmail());
-        }
-        else{
+        } else {
             updatedUser.setSubscriptionExpiresAt(Instant.now()
                     .plusSeconds(userUpdateDto.getSubscriptionTimeInDays() * 86400L)
                     .getEpochSecond());
@@ -301,15 +300,16 @@ public class CoreService {
         log.debug("Конфигурация сгенерирована для {} -> {}", email, ip.getIpAddress().getHostAddress());
         return config;
     }
-    public LoginResponseDto generateConfigForFrontend(LoginRequestDto dto) throws IOException {
+
+    public LoginResponseDto generateConfigForFrontend(LoginRequestDto dto) {
         log.info("Генерация конфигурационного файла для пользователя: {}", dto.getLogin());
 
         User user = userRepository.findUserByEmail(dto.getLogin());
-log.debug("данные из фронта " + dto.getLogin() + " " + dto.getPassword());
+        log.debug("данные из фронта " + dto.getLogin() + " " + dto.getPassword());
         if (user == null) throw new RuntimeException("user not found");
 
         if (!user.getIsActive()) throw new RuntimeException("user is not active");
-        if(!user.getPassword().equals(dto.getPassword())) throw new RuntimeException("password is incorrect");
+        if (!user.getPassword().equals(dto.getPassword())) throw new RuntimeException("password is incorrect");
         Ip ip = ipRepository.findIpByUserId(user.getId());
         if (ip == null || ip.getIpAddress() == null) throw new RuntimeException("no IP assigned for user");
 

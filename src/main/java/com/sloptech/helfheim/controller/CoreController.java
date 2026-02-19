@@ -56,7 +56,7 @@ public class CoreController {
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
-        headers.setContentDispositionFormData("attachment", email + ".conf");
+        headers.setContentDispositionFormData("attachment", "helfheim.conf");
 
         return new ResponseEntity<>(userConfigInBytes,headers,HttpStatus.OK);
     }
